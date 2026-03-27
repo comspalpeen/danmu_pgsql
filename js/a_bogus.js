@@ -1,5 +1,175 @@
 // a_bogus.js
-const { sm3 } = require('sm-crypto');
+
+// MiniRacer 只提供裸 V8 环境，不支持 require/module.exports/Buffer。
+// 这里内联一个纯 JS 的 SM3 实现，保证脚本可直接被 ctx.eval() 执行。
+const _SM3_W = new Uint32Array(68);
+const _SM3_M = new Uint32Array(64);
+
+function sm3Rotl(x, n) {
+    const s = n & 31;
+    return (x << s) | (x >>> (32 - s));
+}
+
+function sm3P0(x) {
+    return (x ^ sm3Rotl(x, 9)) ^ sm3Rotl(x, 17);
+}
+
+function sm3P1(x) {
+    return (x ^ sm3Rotl(x, 15)) ^ sm3Rotl(x, 23);
+}
+
+function sm3Utf8ToArray(str) {
+    const arr = [];
+    for (let i = 0; i < str.length; i++) {
+        const point = str.codePointAt(i);
+        if (point <= 0x007f) {
+            arr.push(point);
+        } else if (point <= 0x07ff) {
+            arr.push(0xc0 | (point >>> 6));
+            arr.push(0x80 | (point & 0x3f));
+        } else if (point <= 0xd7ff || (point >= 0xe000 && point <= 0xffff)) {
+            arr.push(0xe0 | (point >>> 12));
+            arr.push(0x80 | ((point >>> 6) & 0x3f));
+            arr.push(0x80 | (point & 0x3f));
+        } else if (point >= 0x010000 && point <= 0x10ffff) {
+            i++;
+            arr.push(0xf0 | ((point >>> 18) & 0x1c));
+            arr.push(0x80 | ((point >>> 12) & 0x3f));
+            arr.push(0x80 | ((point >>> 6) & 0x3f));
+            arr.push(0x80 | (point & 0x3f));
+        } else {
+            throw new Error("unsupported input");
+        }
+    }
+    return arr;
+}
+
+function sm3ArrayToHex(arr) {
+    return arr
+        .map((item) => {
+            const hex = item.toString(16);
+            return hex.length === 1 ? `0${hex}` : hex;
+        })
+        .join("");
+}
+
+function sm3HexToArray(hexStr) {
+    const words = [];
+    let normalized = hexStr;
+    if (normalized.length % 2 !== 0) {
+        normalized = `0${normalized}`;
+    }
+    for (let i = 0; i < normalized.length; i += 2) {
+        words.push(parseInt(normalized.slice(i, i + 2), 16));
+    }
+    return words;
+}
+
+function sm3Core(array) {
+    let bitLength = array.length * 8;
+    let k = bitLength % 512;
+    k = k >= 448 ? 512 - (k % 448) - 1 : 448 - k - 1;
+
+    const kArr = new Array((k - 7) / 8).fill(0);
+    const lenArr = new Array(8).fill(0);
+    let lenBits = bitLength.toString(2);
+    for (let i = 7; i >= 0; i--) {
+        if (lenBits.length > 8) {
+            const start = lenBits.length - 8;
+            lenArr[i] = parseInt(lenBits.slice(start), 2);
+            lenBits = lenBits.slice(0, start);
+        } else if (lenBits.length > 0) {
+            lenArr[i] = parseInt(lenBits, 2);
+            lenBits = "";
+        }
+    }
+
+    const m = new Uint8Array([...array, 0x80, ...kArr, ...lenArr]);
+    const dataView = new DataView(m.buffer, 0);
+    const n = m.length / 64;
+    const v = new Uint32Array([
+        0x7380166f,
+        0x4914b2b9,
+        0x172442d7,
+        0xda8a0600,
+        0xa96f30bc,
+        0x163138aa,
+        0xe38dee4d,
+        0xb0fb0e4e,
+    ]);
+
+    for (let i = 0; i < n; i++) {
+        _SM3_W.fill(0);
+        _SM3_M.fill(0);
+
+        const start = 16 * i;
+        for (let j = 0; j < 16; j++) {
+            _SM3_W[j] = dataView.getUint32((start + j) * 4, false);
+        }
+
+        for (let j = 16; j < 68; j++) {
+            _SM3_W[j] =
+                (sm3P1((_SM3_W[j - 16] ^ _SM3_W[j - 9]) ^ sm3Rotl(_SM3_W[j - 3], 15)) ^
+                    sm3Rotl(_SM3_W[j - 13], 7)) ^
+                _SM3_W[j - 6];
+        }
+
+        for (let j = 0; j < 64; j++) {
+            _SM3_M[j] = _SM3_W[j] ^ _SM3_W[j + 4];
+        }
+
+        const T1 = 0x79cc4519;
+        const T2 = 0x7a879d8a;
+        let A = v[0];
+        let B = v[1];
+        let C = v[2];
+        let D = v[3];
+        let E = v[4];
+        let F = v[5];
+        let G = v[6];
+        let H = v[7];
+
+        for (let j = 0; j < 64; j++) {
+            const T = j <= 15 ? T1 : T2;
+            const SS1 = sm3Rotl((sm3Rotl(A, 12) + E + sm3Rotl(T, j)) >>> 0, 7);
+            const SS2 = SS1 ^ sm3Rotl(A, 12);
+            const TT1 =
+                (((j <= 15 ? (A ^ B) ^ C : ((A & B) | (A & C) | (B & C))) + D + SS2 + _SM3_M[j]) >>> 0);
+            const TT2 =
+                (((j <= 15 ? (E ^ F) ^ G : ((E & F) | (~E & G))) + H + SS1 + _SM3_W[j]) >>> 0);
+
+            D = C;
+            C = sm3Rotl(B, 9);
+            B = A;
+            A = TT1;
+            H = G;
+            G = sm3Rotl(F, 19);
+            F = E;
+            E = sm3P0(TT2);
+        }
+
+        v[0] ^= A;
+        v[1] ^= B;
+        v[2] ^= C;
+        v[3] ^= D;
+        v[4] ^= E;
+        v[5] ^= F;
+        v[6] ^= G;
+        v[7] ^= H;
+    }
+
+    const result = [];
+    for (let i = 0; i < v.length; i++) {
+        const word = v[i];
+        result.push((word & 0xff000000) >>> 24, (word & 0x00ff0000) >>> 16, (word & 0x0000ff00) >>> 8, word & 0x000000ff);
+    }
+    return result;
+}
+
+function sm3(input) {
+    const bytes = typeof input === "string" ? sm3Utf8ToArray(input) : Array.prototype.slice.call(input);
+    return sm3ArrayToHex(sm3Core(bytes));
+}
 
 class StringProcessor {
     static toCharStr(bytes) {
@@ -47,8 +217,8 @@ class CryptoUtility {
     }
 
     static sm3ToArray(input) {
-        const hash = sm3(input instanceof Uint8Array ? Buffer.from(input) : input);
-        return Buffer.from(hash, "hex").toJSON().data;
+        const hash = sm3(input instanceof Uint8Array ? Array.from(input) : input);
+        return sm3HexToArray(hash);
     }
 
     addSalt(param) {
@@ -307,14 +477,6 @@ class ABogus {
     }
 }
 
-// 导出供外部使用
-module.exports = {
-    StringProcessor,
-    CryptoUtility,
-    BrowserFingerprintGenerator,
-    ABogus
-};
-
 // 兼容原有的 get_ab 函数
 function get_ab(dpf, ua) {
     try {
@@ -322,10 +484,6 @@ function get_ab(dpf, ua) {
         const [finalParams, aBogusValue] = abogus.generateAbogus(dpf, "");
         return aBogusValue;
     } catch (error) {
-        console.error("生成 a_bogus 失败:", error);
         return "";
     }
 }
-
-// 保持原有的导出方式
-module.exports.get_ab = get_ab;

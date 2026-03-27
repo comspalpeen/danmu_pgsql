@@ -12,11 +12,37 @@ from backend_api.common.utils import build_avatar_url, get_ttwid
 
 logger = logging.getLogger("CzLevelService")
 
-# ⚙️ 业务配置
-ENABLE_ZERO_LEVEL_SHIELD = True   # 🛡️ 零级防刷拦截
-ACTIVE_SHIELD_DAYS = 3            # 🛡️ 活跃粉丝升级缓冲盾 (1-10级)
-API_QUERY_LIMIT = 600             # 🚦 单 IP 每小时最多触发外网 API 查询次数
-API_QUERY_WINDOW = 3600           # 🚦 限流窗口期 (秒)
+
+def _to_text(value):
+    if isinstance(value, bytes):
+        return value.decode()
+    return value
+
+
+def _to_int(value, default: int) -> int:
+    text = _to_text(value)
+    if text in (None, ""):
+        return default
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return default
+
+
+def _to_bool(value, default: bool) -> bool:
+    text = _to_text(value)
+    if text in (None, ""):
+        return default
+    if isinstance(text, bool):
+        return text
+    normalized = str(text).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+# （⚠️ 原先在此处的 4 个常量配置已删除，改为从 Redis 动态获取）
 
 UPSERT_USERS_SQL = """
     INSERT INTO users (user_id, sec_uid, display_id, user_name, gender, pay_grade, avatar_url)
@@ -39,25 +65,80 @@ UPSERT_CZFANS_SQL = """
         last_active_time = CURRENT_TIMESTAMP;
 """
 
+# 🗝️ 从 Redis 一次性获取所有动态配置 (带默认值兜底)
+async def get_dynamic_settings(redis) -> dict:
+    settings = {
+        "api_switch": 1,
+        "enable_zero_level_shield": True,
+        "active_shield_days": 3,
+        "api_query_limit": 600,
+        "api_query_window": 3600,
+        "global_api_query_limit": 20000,
+    }
+    if not redis: 
+        return settings
+        
+    try:
+        # 使用 pipeline 提升性能
+        pipe = redis.pipeline()
+        pipe.get("setting:czlevel_api_switch")
+        pipe.get("setting:enable_zero_level_shield")
+        pipe.get("setting:active_shield_days")
+        pipe.get("setting:api_query_limit")
+        pipe.get("setting:api_query_window")
+        pipe.get("setting:global_api_query_limit")
+        results = await pipe.execute()
+        
+        settings["api_switch"] = _to_int(results[0], settings["api_switch"])
+        settings["enable_zero_level_shield"] = _to_bool(
+            results[1],
+            settings["enable_zero_level_shield"],
+        )
+        settings["active_shield_days"] = _to_int(results[2], settings["active_shield_days"])
+        settings["api_query_limit"] = _to_int(results[3], settings["api_query_limit"])
+        settings["api_query_window"] = _to_int(results[4], settings["api_query_window"])
+        settings["global_api_query_limit"] = _to_int(
+            results[5],
+            settings["global_api_query_limit"],
+        )
+    except Exception as e:
+        logger.error(f"❌ 读取动态配置异常: {e}")
+        
+    return settings
+
 # 🔧 IP 提取工具
 def extract_client_ip(request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For")
     client_ip = forwarded_for.split(",")[0] if forwarded_for else request.client.host
     return client_ip or "unknown_ip"
 
-# 🚦 外部 API 配额限流
-async def consume_api_quota(client_ip: str, redis) -> bool:
+# 🚦 外部 API 配额限流 (接入动态参数)
+async def consume_api_quota(client_ip: str, redis, limit: int, window: int) -> bool:
     if not redis:
         return True
     cache_key = f"rate_limit:api_quota:{client_ip}"
     try:
         current_requests = await redis.incr(cache_key)
         if current_requests == 1:
-            await redis.expire(cache_key, API_QUERY_WINDOW)
-        if current_requests > API_QUERY_LIMIT:
+            await redis.expire(cache_key, window)
+        if current_requests > limit:
             return False
     except Exception as e:
         logger.error(f"❌ API 限流器异常: {e}")
+    return True
+
+async def consume_global_api_quota(redis, limit: int, window: int) -> bool:
+    if not redis:
+        return True
+    cache_key = "rate_limit:global_api_quota"
+    try:
+        current_requests = await redis.incr(cache_key)
+        if current_requests == 1:
+            await redis.expire(cache_key, window)
+        if current_requests > limit:
+            return False
+    except Exception as e:
+        logger.error(f"❌ 全局 API 限流器异常: {e}")
     return True
 
 # 查询目标解析
@@ -109,7 +190,6 @@ async def update_display_id_in_db(pool, display_id: str, sec_uid: str):
         logger.error(f"❌ 更新 display_id 失败 [{sec_uid}]: {e}")
 
 async def upsert_user_data(pool, latest_data: dict, target_display_id: str):
-    """向 users + cz_fans 做 UPSERT，修复了此前的参数缺失异常"""
     if not latest_data.get('display_id') and target_display_id:
         latest_data['display_id'] = target_display_id
     try:
@@ -186,8 +266,8 @@ async def fetch_live_profile(session: aiohttp.ClientSession, sec_uid: str, ttwid
         logger.error(f"❌ 获取 Profile 失败 [{sec_uid}]: {e}")
     return {}
 
-# 🛡️ 业务防刷盾评估
-def evaluate_business_shields(user_record, query_str: str, target_sec_uid: str, target_display_id: str):
+# 🛡️ 业务防刷盾评估 (接入动态参数)
+def evaluate_business_shields(user_record, query_str: str, target_sec_uid: str, target_display_id: str, enable_zero_shield: bool, active_shield_days: int):
     if not user_record or user_record.get('raw_cz_level') is None:
         return None
 
@@ -203,31 +283,21 @@ def evaluate_business_shields(user_record, query_str: str, target_sec_uid: str, 
 
     if raw_level >= 12:
         return {**base_resp, "source": "database"}
-    if ENABLE_ZERO_LEVEL_SHIELD and raw_level == 0:
+    if enable_zero_shield and raw_level == 0:
         return {**base_resp, "source": "database_zero_blocked"}
 
     last_active = user_record.get('last_active_time')
     if (
-        ACTIVE_SHIELD_DAYS > 0
+        active_shield_days > 0
         and 0 < raw_level <= 10
         and last_active
-        and (datetime.now() - last_active).days < ACTIVE_SHIELD_DAYS
+        and (datetime.now() - last_active).days < active_shield_days
     ):
         return {**base_resp, "source": "database_recent_blocked"}
 
     return None
-    
-# 🗝️ Redis 开关 & 缓存
-async def get_api_switch(redis) -> bytes:
-    if not redis: return b"1"
-    try:
-        stored_val = await redis.get("setting:czlevel_api_switch")
-        if stored_val is not None: return stored_val
-    except Exception: pass
-    return b"1"
 
 async def cache_czlevel_result(redis, final_res: dict, latest_data: dict, target_sec_uid: str, target_display_id: str):
-    """优化了序列化性能，复用 bytes 载荷直接打入双端 ID"""
     if not redis or final_res["level"] >= 12:
         return
     cache_data = {**final_res, "source": "redis_cache"}

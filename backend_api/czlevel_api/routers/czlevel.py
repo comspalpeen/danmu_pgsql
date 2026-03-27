@@ -1,5 +1,5 @@
 # 文件位置: backend_api/czlevel_api/routers/czlevel.py
-from fastapi import APIRouter, HTTPException, Query, Depends, Request, Header
+from fastapi import APIRouter, HTTPException, Query, Request
 import aiohttp
 import logging
 import orjson as json
@@ -8,13 +8,12 @@ import asyncio
 from backend_api.common.database import get_redis, get_db
 from backend_api.common.utils import build_avatar_url, get_ttwid
 from backend_api.common.models import CzLevelBatchRequest
-from backend_api.common.config import ADMIN_SECRET
 from backend_api.czlevel_api.routers.services import (
-    API_QUERY_LIMIT,
     extract_client_ip,
     consume_api_quota,
+    consume_global_api_quota,
     parse_query_target,
-    get_api_switch,
+    get_dynamic_settings,
     fetch_user_record_from_db,
     fetch_users_batch_from_db,
     update_display_id_in_db,
@@ -27,19 +26,6 @@ from backend_api.czlevel_api.routers.services import (
 
 logger = logging.getLogger("CzLevelAPI")
 router = APIRouter(tags=["czlevel"])
-
-def verify_admin(x_admin_token: str = Header(..., alias="x-admin-token")):
-    if x_admin_token != ADMIN_SECRET:
-        raise HTTPException(status_code=403, detail="无权访问")
-
-@router.post("/api/czlevel/api_switch", dependencies=[Depends(verify_admin)])
-async def toggle_api_switch(mode: int = Query(..., description="0:关闭 1:全开 2:仅转换")):
-    if mode not in (0, 1, 2): raise HTTPException(status_code=400, detail="模式错误")
-    redis = await get_redis()
-    if not redis: raise HTTPException(status_code=500, detail="Redis异常")
-    await redis.set("setting:czlevel_api_switch", str(mode))
-    mode_text = {0: "关闭 🛑", 1: "全开 ✅", 2: "仅转换 ⚠️"}
-    return {"message": f"外网查询功能已切换至：{mode_text[mode]}"}
 
 @router.get("/api/czlevel/author")
 async def get_cz_author_info():
@@ -60,19 +46,27 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
     if not query_str: raise HTTPException(status_code=400, detail="不能为空")
 
     pool = get_db()
+    redis = await get_redis()
+    
+    # 获取所有的动态配置
+    settings = await get_dynamic_settings(redis)
+    api_switch = settings["api_switch"]
+
     target_sec_uid, target_display_id = parse_query_target(query_str)
-
     user_record = None
-    try: user_record = await fetch_user_record_from_db(pool, target_sec_uid, target_display_id)
-    except Exception as e: logger.error(f"❌ 查库异常: {e}")
+    try: 
+        user_record = await fetch_user_record_from_db(pool, target_sec_uid, target_display_id)
+    except Exception as e: 
+        logger.error(f"❌ 查库异常: {e}")
 
-    shield_result = evaluate_business_shields(user_record, query_str, target_sec_uid, target_display_id)
+    # 将动态盾牌参数传入
+    shield_result = evaluate_business_shields(
+        user_record, query_str, target_sec_uid, target_display_id,
+        settings["enable_zero_level_shield"], settings["active_shield_days"]
+    )
     if shield_result: return shield_result
 
-    redis = await get_redis()
-    api_switch = await get_api_switch(redis)
-
-    if api_switch == b"0":
+    if api_switch == 0:
         raw_level = user_record['raw_cz_level'] if user_record else None
         return {
             "sec_uid":    user_record['sec_uid'] if user_record else (target_sec_uid or ""),
@@ -100,7 +94,10 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
                     new_record = await fetch_user_record_from_db(pool, target_sec_uid=target_sec_uid)
                     if new_record:
                         user_record = new_record
-                        shield_result = evaluate_business_shields(user_record, query_str, target_sec_uid, target_display_id)
+                        shield_result = evaluate_business_shields(
+                            user_record, query_str, target_sec_uid, target_display_id,
+                            settings["enable_zero_level_shield"], settings["active_shield_days"]
+                        )
                         if shield_result: return shield_result
                 except Exception as e: logger.error(f"❌ 转换后复查异常: {e}")
 
@@ -113,7 +110,7 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
                 "source": "convert_failed", "passed": False
             }
 
-        if api_switch == b"2":
+        if api_switch == 2:
             return {
                 "sec_uid": target_sec_uid, "display_id": target_display_id or query_str,
                 "nickname": user_record['user_name'] if user_record else "未知用户",
@@ -123,9 +120,20 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
             }
 
         client_ip = extract_client_ip(request)
-        can_use_api = await consume_api_quota(client_ip, redis)
-        if not can_use_api:
-            logger.info(f"⚠️ [{query_str}] IP 触发等级查询降级限流 (>{API_QUERY_LIMIT}次/小时)")
+        ip_quota_ok = await consume_api_quota(client_ip, redis, settings["api_query_limit"], settings["api_query_window"])
+        global_quota_ok = True
+        if ip_quota_ok:
+            global_quota_ok = await consume_global_api_quota(
+                redis,
+                settings["global_api_query_limit"],
+                settings["api_query_window"],
+            )
+
+        if not ip_quota_ok or not global_quota_ok:
+            if not ip_quota_ok:
+                logger.info(f"⚠️ [{query_str}] IP 触发等级查询降级限流 (>{settings['api_query_limit']}次/小时)")
+            if not global_quota_ok:
+                logger.warning("触发全局大盘限流，已全面降级")
             return {
                 "sec_uid": user_record['sec_uid'] if user_record else (target_sec_uid or ""),
                 "display_id": target_display_id or query_str,
@@ -180,18 +188,20 @@ async def batch_check_cz_level(req: CzLevelBatchRequest):
             display_ids_to_query.append(t)
 
     pool = get_db()
-    try: db_records = await fetch_users_batch_from_db(pool, sec_uids_to_query, display_ids_to_query)
+    try: 
+        db_records = await fetch_users_batch_from_db(pool, sec_uids_to_query, display_ids_to_query)
     except Exception as e:
         logger.error(f"❌ 批量查库异常: {e}")
         db_records = {}
 
     redis = await get_redis()
-    api_switch = await get_api_switch(redis)
+    settings = await get_dynamic_settings(redis)
+    api_switch = settings["api_switch"]
 
     converted_map = {}
     missing_display_ids = [did for did in display_ids_to_query if did not in db_records]
 
-    if api_switch != b"0" and missing_display_ids:
+    if api_switch != 0 and missing_display_ids:
         async with aiohttp.ClientSession() as session:
             tasks   = [fetch_sec_uid(session, did) for did in missing_display_ids]
             results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -214,7 +224,7 @@ async def batch_check_cz_level(req: CzLevelBatchRequest):
                 except Exception: pass
 
     final_response = []
-    base_source = "database_only" if api_switch == b"0" else "database"
+    base_source = "database_only" if api_switch == 0 else "database"
 
     for t in targets:
         item = parsed_targets[t]
@@ -223,7 +233,6 @@ async def batch_check_cz_level(req: CzLevelBatchRequest):
         record = db_records.get(val)
         source = base_source
 
-        # 精简逻辑：如果直查未命中，且原本输入的是 display_id，则尝试去转换表中获取关联数据
         if not record and item["type"] == "display_id" and val in converted_map:
             mapped_su = converted_map[val]
             record    = db_records.get(mapped_su)

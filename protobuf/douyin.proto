@@ -427,30 +427,6 @@ message ControlMessage {
   int32 status = 2;
 }
 
-// PK结束/结算消息 
-// 基于抓包数据 1vs7.txt, 2v2.txt 修正
-message LinkMicBattleFinishMethod {
-  Common common = 1;
-  BattleFinishInfo info = 2;   
-  repeated BattleContributors contributors = 3; 
-  repeated BattleScore scores = 4;  
-  repeated BattleArmy anchors = 12;
-  
-  BattleSkinConfig skin_config = 15;
-  string event_tracking_info = 18;
-}
-
-message BattleFinishInfo {
-  uint64 battle_id = 2;
-  uint64 start_time_ms = 3;
-  uint64 duration = 4;
-  uint64 channel_id = 6;
-  BattleTitleConfig title_config = 17;
-  BattlePunishConfig punish_config = 18;
-  string battle_config_json = 39;
-  uint64 status = 40;
-}
-  
 
 // 战绩/分数详情 (对应 Field 4)
 message BattleScore {
@@ -768,4 +744,158 @@ message LotteryContent {
   string content = 2;   // e.g. "点点关注+价值1万8苹果手机"
   uint64 value = 3;
 }
+message BindingGiftMessage {
+  GiftMessage msg = 1;
+  Common common = 2;
+}
+message LinkMicMethod {
+  Common common = 1;
+  uint64 message_type = 2;
+  uint64 channel_id = 8;
+  uint64 start_time = 15;
+  uint64 duration = 16;
+  repeated UserScores user_scores = 17;
+  uint64 match_type = 18;
+  bool win = 19;
+  string prompts = 20;
+  uint64 to_user_id = 21;
 
+  uint64 start_time_ms = 26;
+  string score_update_log_id = 82;
+  uint64 battle_id = 104;
+}
+message UserScores {
+  uint64 score = 1;
+  uint64 user_id = 2;
+  string score_relative_text = 4;
+  bool is_large_pk_score = 5;
+  string score_blur_text = 7;
+  uint64 battle_rank = 8;
+  bool new_score_open = 9;
+  string multi_pk_team_score_text = 10;
+  uint64 multi_pk_team_score = 11;
+  uint64 multi_pk_team_rank = 12;
+  bool is_multi_pk_relative_text = 13;
+  string cur_add_score_text = 14;
+  uint64 buff_score_ratio = 15;
+  uint64 contribute_count = 16;
+  uint64 score_version = 17;
+}
+
+message LinkMicBattle {
+  Common common = 1;
+  BattleFinishInfo info = 2;   
+  int32 skin_type = 5;
+  repeated BattleArmy anchors = 6;
+
+  int32 battle_type = 8;
+  bool relative_score = 9;
+  bool normal_to_multiple = 10;
+
+  string request_source = 13;
+  string event_tracking_info = 14;
+  string battle_attached_info = 15;
+}
+
+message BattleFinishInfo {
+  uint64 battle_id = 2;
+  uint64 start_time_ms = 3;
+  uint64 duration = 4;
+  uint64 channel_id = 6;
+  BattleTitleConfig title_config = 17;
+  BattlePunishConfig punish_config = 18;
+  uint64 initiator_id = 34;
+  int32 battle_type = 35;
+  uint64 finished = 36;
+  repeated int32 play_tags = 37;
+  uint64 steal_tower_duration = 38;
+  uint64 status = 40;
+}
+  
+// PK结束/结算消息 
+// 基于抓包数据 1vs7.txt, 2v2.txt 修正
+message LinkMicBattleFinishMethod {
+  Common common = 1;
+  BattleFinishInfo info = 2;   
+  repeated BattleContributors contributors = 3; 
+  repeated BattleScore scores = 4;  
+  repeated BattleArmy anchors = 12;
+  
+  BattleSkinConfig skin_config = 15;
+  string event_tracking_info = 18;
+}
+message LinkMessage {
+    Common common = 1;
+    uint64 message_type = 2;
+    uint64 linker_id = 3;
+    uint64 scene = 4;
+    LinkerLinkedListChangeContent linked_list_change_content = 13;
+    LinkerUpdateUserContent update_user_content = 14;
+}
+message LinkerUpdateUserContent {
+      uint64 from_user_id = 1;
+      uint64 to_user_id = 2;
+      map<string, string> update_info = 3;
+      repeated ListUser linked_users = 4;
+      string extra = 5;
+      uint64 version = 6;
+      map<int64,RoomLinkerContent>  linker_content_map = 7;
+      string ack_message = 8;
+      string from_open_id = 5000;
+      string to_open_id = 5001;
+    }
+message ListUser {
+    User user = 1;
+    uint64 linkmic_id = 2;
+    string linkmic_id_str = 3;
+    int32 link_status = 4;
+    int32 link_type = 5;
+    int32 user_position = 6;
+    int32 silence_status = 7;
+    uint64 modify_time = 8;
+    uint64 linker_id = 9;
+    int32 role_type = 10;
+    uint64 mc_status = 12;
+    uint64 is_background = 13;
+    bool pk_available = 16;
+    string linkmic_unique_id = 17;
+    uint64 k_song_uid = 18;
+    string extra = 200;
+}
+message LinkerLinkedListChangeContent {
+      repeated ListUser linked_users = 1;
+      repeated ListUser pre_link_users = 2;
+      uint64 version = 3;
+      int32 push_type = 4;
+      map<int64,RoomLinkerContent>  linker_content_map = 5;
+      int32 update_mode = 6;
+    }
+message RoomLinkerContent {
+    repeated ListUser linked_users = 1;
+    int32 room_link_silence_status = 2;
+    uint64 anchor_id = 3;
+    uint64 is_anchor_background = 4;
+    uint64 version = 5;
+    uint64 live_room_mode = 6;
+    string anchor_open_id = 5000;
+}
+// 新增：全局房间数据同步消息
+message RoomDataSyncMessage {
+    Common common = 1;
+    uint64 room_id = 2;
+    string sync_key = 3;             // 核心标识，例如 "RoomLinkMicSyncData"
+    uint64 version = 4;
+    RoomLinkMicSyncData payload = 5; // 连麦的真实数据负载
+    string log_id = 6;
+}
+
+// 新增：连麦同步具体数据
+message RoomLinkMicSyncData {
+    repeated ListUser linked_users = 1; // 麦上用户列表 (完美复用我们之前的 ListUser)
+    SyncMeta meta = 3;                  // 场景元数据
+}
+
+// 新增：连麦场景元数据
+message SyncMeta {
+    uint64 scene = 1; // 连麦场景，8 代表观众连线
+}

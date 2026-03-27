@@ -80,6 +80,7 @@ class MessageHandler:
         self.last_seq_time = 0
         self.THROTTLE_INTERVAL = 1 
         self.vip_users_cache = {}
+        self.current_guest_mic_users = set()
     async def handle(self, method, payload):
         try:
             if method == 'WebcastChatMessage':
@@ -108,6 +109,8 @@ class MessageHandler:
                 await self._parse_fansclub(payload)
             elif method == 'WebcastSocialMessage':
                 await self._parse_social(payload)
+            elif method == 'WebcastLinkMessage':  # ✅ 新增连线消息解析
+                await self._parse_link_message(payload)
         except Exception as e:
             logger.error(f"⚠️ 消息分发解析异常 [{method}]: {e}", exc_info=True)
         return False
@@ -486,3 +489,106 @@ class MessageHandler:
                 
         except Exception as e:
             pass
+    async def _parse_link_message(self, payload):
+        try:
+            message = douyin_pb2.LinkMessage()
+            message.ParseFromString(payload)
+            
+            # ✅ 1. 强力过滤：我们只关心观众连线场景 (Scene 8)
+            # 如果是 Scene 1 (主播自己的心跳)，直接丢弃，不浪费 CPU
+            if message.scene != 8:
+                return
+                
+            has_change = message.HasField('linked_list_change_content')
+            has_update = message.HasField('update_user_content')
+            
+            TARGET_USER_ID = 63871524957  # 陈泽的 UID
+            TARGET_OWN_ROOM = "615189692839"  # 陈泽自己的 Live ID
+            
+            if has_change or has_update:
+                # 确定当前应该读取哪个包的列表
+                linked_users = []
+                if has_change:
+                    linked_users = message.linked_list_change_content.linked_users
+                elif has_update:
+                    linked_users = message.update_user_content.linked_users
+                
+                # ✅ 2. 提取当前包里所有的真实用户 ID
+                current_packet_user_ids = set()
+                for lu in linked_users:
+                    if lu.HasField('user'):
+                        # 阻断逻辑：他在自己房间上麦不算
+                        if str(self.live_id) == TARGET_OWN_ROOM and lu.user.id == TARGET_USER_ID:
+                            continue
+                        current_packet_user_ids.add(lu.user.id)
+                        
+                # ✅ 3. 核心 Diff 逻辑：对比上一次的记录
+                
+                # 场景 A：目标刚上麦 (当前包里有，但之前记录里没有)
+                if TARGET_USER_ID in current_packet_user_ids and TARGET_USER_ID not in self.current_guest_mic_users:
+                    logger.info("="*50)
+                    logger.info(f"[动态更新] 目标 (陈泽) 刚刚空降连麦！所在房间: {self.live_id}")
+                    logger.info("="*50)
+                    # TODO: 这里可以触发给你的微信/钉钉发送报警推送
+                    
+                # 场景 B：目标刚下麦 (当前包里没有了，但之前记录里有)
+                elif TARGET_USER_ID not in current_packet_user_ids and TARGET_USER_ID in self.current_guest_mic_users:
+                    logger.info("="*50)
+                    logger.info(f"[动态更新] 目标 (陈泽) 已下麦。所在房间: {self.live_id}")
+                    logger.info("="*50)
+                    # TODO: 更新数据库状态，记录连麦结束时间等
+
+                # ✅ 4. 更新内存中的状态快照，等待下一个包的比对
+                self.current_guest_mic_users = current_packet_user_ids
+
+        except Exception as e:
+            logger.error(f"❌ _parse_link_message 解析异常: {e}", exc_info=True)
+    async def _parse_sync_message(self, payload):
+        try:
+            message = douyin_pb2.RoomDataSyncMessage()
+            message.ParseFromString(payload)
+            
+            # 1. 核心过滤：只处理连麦数据的同步包
+            if message.sync_key != "RoomLinkMicSyncData":
+                return
+                
+            # 2. 提取负载与场景
+            payload_data = message.payload
+            scene = payload_data.meta.scene if payload_data.HasField('meta') else 0
+            
+            # 我们依然只盯防 Scene 8 (观众连线)
+            if scene != 8:
+                return
+
+            TARGET_ID = 63871524957  # 陈泽的 UID (数字格式)
+            TARGET_OWN_ROOM = "615189692839"
+            
+            # 主场屏蔽逻辑
+            if str(self.live_id) == TARGET_OWN_ROOM:
+                return
+
+            # 3. 提取所有麦上真实用户 ID
+            current_packet_user_ids = set()
+            for lu in payload_data.linked_users:
+                if lu.HasField('user'):
+                    current_packet_user_ids.add(lu.user.id)
+                    
+            # 4. Diff 状态机判定 (复用之前的防刷屏逻辑)
+            if TARGET_ID in current_packet_user_ids and TARGET_ID not in self.current_guest_mic_users:
+                # 刚上麦！
+                logger.info("🔥" * 20)
+                logger.info(f"🚨 [PC端同步捕获] 目标大哥刚上麦！所在房间: {self.live_id}")
+                logger.info(f"📦 驱动协议: WebcastRoomDataSyncMessage | Scene: {scene}")
+                logger.info("🔥" * 20)
+                
+            elif TARGET_ID not in current_packet_user_ids and TARGET_ID in self.current_guest_mic_users:
+                # 刚下麦！
+                logger.info("=" * 50)
+                logger.info(f"👋 [动态更新] 目标已下麦 (PC端同步判定)。房间: {self.live_id}")
+                logger.info("=" * 50)
+
+            # 更新内存快照
+            self.current_guest_mic_users = current_packet_user_ids
+
+        except Exception as e:
+            logger.error(f"❌ 解析 RoomDataSyncMessage 异常: {e}", exc_info=True)

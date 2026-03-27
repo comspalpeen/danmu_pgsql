@@ -5,8 +5,7 @@ import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend_api.common.database import lifespan
-from routers import check, favorites, legacy, reports, ai_chat,tieba
-#, tieba
+from routers import check, favorites, reports, ai_chat, tieba, rooms, authors, search, admin
 
 app = FastAPI(lifespan=lifespan)
 
@@ -22,9 +21,12 @@ app.add_middleware(
 app.include_router(check.router)
 app.include_router(favorites.router)
 app.include_router(reports.router)
-app.include_router(legacy.router) 
 app.include_router(ai_chat.router)
 app.include_router(tieba.router)
+app.include_router(rooms.router)
+app.include_router(authors.router)
+app.include_router(search.router)
+app.include_router(admin.router)
 #app.include_router(tieba.router)
 if __name__ == "__main__":
     # 保持您原本能跑通的启动参数，并加上代理信任参数

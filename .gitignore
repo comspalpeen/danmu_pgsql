@@ -170,3 +170,9 @@ yarn-error.log*
 logs/
 js/dist/
 js/node_modules/
+
+
+
+.agents/
+.claude/
+AGENTS.md
