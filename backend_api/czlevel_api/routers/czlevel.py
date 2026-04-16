@@ -50,7 +50,7 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
     
     # 获取所有的动态配置
     settings = await get_dynamic_settings(redis)
-    api_switch = settings["api_switch"]
+    api_switch = settings["single_api_switch"]
 
     target_sec_uid, target_display_id = parse_query_target(query_str)
     user_record = None
@@ -120,20 +120,29 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
             }
 
         client_ip = extract_client_ip(request)
-        ip_quota_ok = await consume_api_quota(client_ip, redis, settings["api_query_limit"], settings["api_query_window"])
+        ip_quota_ok = await consume_api_quota(
+            client_ip,
+            redis,
+            settings["single_api_query_limit"],
+            settings["single_api_query_window"],
+            namespace="single",
+        )
         global_quota_ok = True
         if ip_quota_ok:
             global_quota_ok = await consume_global_api_quota(
                 redis,
-                settings["global_api_query_limit"],
-                settings["api_query_window"],
+                settings["single_global_api_query_limit"],
+                settings["single_api_query_window"],
+                namespace="single",
             )
 
         if not ip_quota_ok or not global_quota_ok:
             if not ip_quota_ok:
-                logger.info(f"⚠️ [{query_str}] IP 触发等级查询降级限流 (>{settings['api_query_limit']}次/小时)")
+                logger.info(
+                    f"⚠️ [{query_str}] IP 触发单次等级查询降级限流 (>{settings['single_api_query_limit']}次/窗口)"
+                )
             if not global_quota_ok:
-                logger.warning("触发全局大盘限流，已全面降级")
+                logger.warning("触发单次查询全局大盘限流，已全面降级")
             return {
                 "sec_uid": user_record['sec_uid'] if user_record else (target_sec_uid or ""),
                 "display_id": target_display_id or query_str,
@@ -172,10 +181,10 @@ async def check_cz_level(request: Request, display_id: str = Query(...)):
         return final_res
 
 @router.post("/api/czlevel/batch")
-async def batch_check_cz_level(req: CzLevelBatchRequest):
+async def batch_check_cz_level(req: CzLevelBatchRequest, request: Request):
     targets = [t.strip() for t in req.targets if t.strip()]
     if not targets: raise HTTPException(status_code=400, detail="不能为空")
-    if len(targets) > 100: raise HTTPException(status_code=400, detail="单次查询不能超过 100 条")
+    if len(targets) > 100: raise HTTPException(status_code=400, detail="批量查询不能超过 100 条")
 
     parsed_targets, sec_uids_to_query, display_ids_to_query = {}, [], []
     for t in targets:
@@ -196,10 +205,40 @@ async def batch_check_cz_level(req: CzLevelBatchRequest):
 
     redis = await get_redis()
     settings = await get_dynamic_settings(redis)
-    api_switch = settings["api_switch"]
+    api_switch = settings["batch_api_switch"]
 
     converted_map = {}
     missing_display_ids = [did for did in display_ids_to_query if did not in db_records]
+    batch_network_budget = len(missing_display_ids)
+
+    if api_switch != 0 and missing_display_ids:
+        client_ip = extract_client_ip(request)
+        ip_quota_ok = await consume_api_quota(
+            client_ip,
+            redis,
+            settings["batch_api_query_limit"],
+            settings["batch_api_query_window"],
+            namespace="batch",
+            amount=batch_network_budget,
+        )
+        global_quota_ok = True
+        if ip_quota_ok:
+            global_quota_ok = await consume_global_api_quota(
+                redis,
+                settings["batch_global_api_query_limit"],
+                settings["batch_api_query_window"],
+                namespace="batch",
+                amount=batch_network_budget,
+            )
+
+        if not ip_quota_ok or not global_quota_ok:
+            if not ip_quota_ok:
+                logger.info(
+                    f"⚠️ 批量查询触发 IP 限流降级 (>{settings['batch_api_query_limit']}次/窗口)"
+                )
+            if not global_quota_ok:
+                logger.warning("触发批量查询全局大盘限流，已降级为仅数据库模式")
+            api_switch = 0
 
     if api_switch != 0 and missing_display_ids:
         async with aiohttp.ClientSession() as session:

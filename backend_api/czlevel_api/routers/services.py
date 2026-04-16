@@ -68,12 +68,16 @@ UPSERT_CZFANS_SQL = """
 # 🗝️ 从 Redis 一次性获取所有动态配置 (带默认值兜底)
 async def get_dynamic_settings(redis) -> dict:
     settings = {
-        "api_switch": 1,
+        "single_api_switch": 1,
+        "batch_api_switch": 1,
         "enable_zero_level_shield": True,
         "active_shield_days": 3,
-        "api_query_limit": 600,
-        "api_query_window": 3600,
-        "global_api_query_limit": 20000,
+        "single_api_query_limit": 600,
+        "single_api_query_window": 3600,
+        "single_global_api_query_limit": 20000,
+        "batch_api_query_limit": 600,
+        "batch_api_query_window": 3600,
+        "batch_global_api_query_limit": 20000,
     }
     if not redis: 
         return settings
@@ -81,26 +85,40 @@ async def get_dynamic_settings(redis) -> dict:
     try:
         # 使用 pipeline 提升性能
         pipe = redis.pipeline()
-        pipe.get("setting:czlevel_api_switch")
+        pipe.get("setting:single_api_switch")
+        pipe.get("setting:batch_api_switch")
         pipe.get("setting:enable_zero_level_shield")
         pipe.get("setting:active_shield_days")
+        pipe.get("setting:single_api_query_limit")
+        pipe.get("setting:single_api_query_window")
+        pipe.get("setting:single_global_api_query_limit")
+        pipe.get("setting:batch_api_query_limit")
+        pipe.get("setting:batch_api_query_window")
+        pipe.get("setting:batch_global_api_query_limit")
+        pipe.get("setting:czlevel_api_switch")
         pipe.get("setting:api_query_limit")
         pipe.get("setting:api_query_window")
         pipe.get("setting:global_api_query_limit")
         results = await pipe.execute()
         
-        settings["api_switch"] = _to_int(results[0], settings["api_switch"])
+        legacy_api_switch = _to_int(results[10], settings["single_api_switch"])
+        legacy_limit = _to_int(results[11], settings["single_api_query_limit"])
+        legacy_window = _to_int(results[12], settings["single_api_query_window"])
+        legacy_global_limit = _to_int(results[13], settings["single_global_api_query_limit"])
+
+        settings["single_api_switch"] = _to_int(results[0], legacy_api_switch)
+        settings["batch_api_switch"] = _to_int(results[1], legacy_api_switch)
         settings["enable_zero_level_shield"] = _to_bool(
-            results[1],
+            results[2],
             settings["enable_zero_level_shield"],
         )
-        settings["active_shield_days"] = _to_int(results[2], settings["active_shield_days"])
-        settings["api_query_limit"] = _to_int(results[3], settings["api_query_limit"])
-        settings["api_query_window"] = _to_int(results[4], settings["api_query_window"])
-        settings["global_api_query_limit"] = _to_int(
-            results[5],
-            settings["global_api_query_limit"],
-        )
+        settings["active_shield_days"] = _to_int(results[3], settings["active_shield_days"])
+        settings["single_api_query_limit"] = _to_int(results[4], legacy_limit)
+        settings["single_api_query_window"] = _to_int(results[5], legacy_window)
+        settings["single_global_api_query_limit"] = _to_int(results[6], legacy_global_limit)
+        settings["batch_api_query_limit"] = _to_int(results[7], legacy_limit)
+        settings["batch_api_query_window"] = _to_int(results[8], legacy_window)
+        settings["batch_global_api_query_limit"] = _to_int(results[9], legacy_global_limit)
     except Exception as e:
         logger.error(f"❌ 读取动态配置异常: {e}")
         
@@ -113,13 +131,20 @@ def extract_client_ip(request) -> str:
     return client_ip or "unknown_ip"
 
 # 🚦 外部 API 配额限流 (接入动态参数)
-async def consume_api_quota(client_ip: str, redis, limit: int, window: int) -> bool:
+async def consume_api_quota(
+    client_ip: str,
+    redis,
+    limit: int,
+    window: int,
+    namespace: str = "single",
+    amount: int = 1,
+) -> bool:
     if not redis:
         return True
-    cache_key = f"rate_limit:api_quota:{client_ip}"
+    cache_key = f"rate_limit:api_quota:{namespace}:{client_ip}"
     try:
-        current_requests = await redis.incr(cache_key)
-        if current_requests == 1:
+        current_requests = await redis.incrby(cache_key, max(1, amount))
+        if current_requests <= max(1, amount):
             await redis.expire(cache_key, window)
         if current_requests > limit:
             return False
@@ -127,13 +152,19 @@ async def consume_api_quota(client_ip: str, redis, limit: int, window: int) -> b
         logger.error(f"❌ API 限流器异常: {e}")
     return True
 
-async def consume_global_api_quota(redis, limit: int, window: int) -> bool:
+async def consume_global_api_quota(
+    redis,
+    limit: int,
+    window: int,
+    namespace: str = "single",
+    amount: int = 1,
+) -> bool:
     if not redis:
         return True
-    cache_key = "rate_limit:global_api_quota"
+    cache_key = f"rate_limit:global_api_quota:{namespace}"
     try:
-        current_requests = await redis.incr(cache_key)
-        if current_requests == 1:
+        current_requests = await redis.incrby(cache_key, max(1, amount))
+        if current_requests <= max(1, amount):
             await redis.expire(cache_key, window)
         if current_requests > limit:
             return False

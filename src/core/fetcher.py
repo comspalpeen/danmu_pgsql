@@ -302,29 +302,24 @@ class AsyncDouyinLiveWebFetcher:
         wss += f"&signature={signature}"
         
         strategies = []
-        
-        # ✅ 新增：从 initial_state 获取 Monitor 传过来的开播类型标志
-        is_phone_stream = False
-        if self.initial_state:
-            is_phone_stream = self.initial_state.get('is_phone_stream', False)
 
-        # ✅ 取消硬编码白名单，改为动态判断
-        if is_phone_stream and self.db:
+        # ✅ 修改点：移除了 is_phone_stream 的判断，统一优先使用真实 Cookie
+        if self.db:
             try:
                 real_cookies = await self.db.get_all_cookies()
                 if real_cookies:
                     selected_cookie = random.choice(real_cookies)
                     strategies.append({
-                        "name": f"RealCookie(Phone Stream | Pool:{len(real_cookies)})",
+                        "name": f"RealCookie(All Stream | Pool:{len(real_cookies)})",
                         "headers": {
                             "Cookie": selected_cookie,
                             "User-Agent": self.user_agent
                         }
                     })
             except Exception as e:
-                pass
+                logger.error(f"⚠️ 获取真实 Cookie 失败: {e}")
 
-        # ✅ 兜底策略：第三方推流，或者手机推流但没拿到真实 Cookie 时，使用 ttwid
+        # ✅ 兜底策略：如果数据库里没有 Cookie 或查询失败，再尝试使用游客 ttwid
         strategies.append({
             "name": "Default(TTWID)",
             "headers": {
@@ -365,6 +360,7 @@ class AsyncDouyinLiveWebFetcher:
                         return 
 
                 except Exception as e:
+                    logger.debug(f"⚠️ 策略 [{mode_name}] 连接失败，尝试下一个... 原因: {e}")
                     continue
 
             logger.error(f"❌ 所有 WebSocket 连接策略均失败: {self.live_id}")
@@ -374,7 +370,6 @@ class AsyncDouyinLiveWebFetcher:
             if self.ws and not self.ws.closed:
                 await self.ws.close()
             logger.info(f"👋 [LiveMan] 录制任务结束/退出: {self.live_id}")
-
     async def _lazy_update_room_info(self):
         try:
             for i in range(3):

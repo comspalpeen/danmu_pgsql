@@ -15,10 +15,10 @@ async def export_html():
             MIN(g.send_time) AS first_time
         FROM live_gifts g
         LEFT JOIN users u ON g.user_id = u.user_id
-        WHERE g.room_id = '7629010355968166683'
-          AND g.send_time >= '2026-04-16 00:56:21 '
-          AND g.send_time < '2026-04-16  01:08:21'
-          AND (g.gift_name LIKE '%飞机%' OR g.gift_name LIKE '%直升机%' OR g.gift_name LIKE '%钻石飞机%' )
+        WHERE g.room_id = '7628266957075778340'
+          AND g.send_time >= '2026-04-14 00:08:00 '
+          AND g.send_time < '2026-04-14 01:22:59'
+          AND (g.gift_name LIKE '%跑车%' OR g.gift_name LIKE '%钻石跑车%' OR g.gift_name LIKE '%跑车%' )
         GROUP BY u.user_name, g.user_name, g.gift_name, u.sec_uid
         ORDER BY first_time ASC;
     """
@@ -40,7 +40,7 @@ async def export_html():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <title>陈泽陈泽直播间 - “飞机”</title>
+        <title>刘军-直播间 - “宝箱”</title>
         <style>
             body { 
                 font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; 
@@ -125,7 +125,7 @@ async def export_html():
     </head>
     <body>
         <div class="app-container">
-            <h2>陈泽陈泽直播间 (00:56-01:08) “飞机”</h2>
+            <h2>刘军直播间 (00:08-01:23) “跑车”</h2>
     """
 
     if not records:
@@ -152,7 +152,7 @@ async def export_html():
             
             # 生成抖音主页外链
             if sec_uid:
-                profile_link = f'<a class="profile-link" href="https://www.douyin.com/user/{sec_uid}" target="_blank">主页</a>'
+                profile_link = f'<a class="profile-link" href="https://www.iesdouyin.com/share/user/{sec_uid}" target="_blank">主页</a>'
             else:
                 profile_link = '<span style="color:#cbd5e1; font-size: 12px;">暂无</span>'
                 

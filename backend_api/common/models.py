@@ -114,9 +114,13 @@ class CzLevelResponse(BaseModel):
     source: str
     passed: bool
 class SystemSettings(BaseModel):
-    api_switch: int = 1 
+    single_api_switch: int = 1
+    batch_api_switch: int = 1
     enable_zero_level_shield: bool = True
     active_shield_days: int = 3
-    api_query_limit: int = 600
-    api_query_window: int = 3600
-    global_api_query_limit: int = 20000
+    single_api_query_limit: int = 600
+    single_api_query_window: int = 3600
+    single_global_api_query_limit: int = 20000
+    batch_api_query_limit: int = 600
+    batch_api_query_window: int = 3600
+    batch_global_api_query_limit: int = 20000

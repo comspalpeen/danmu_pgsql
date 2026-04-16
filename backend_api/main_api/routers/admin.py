@@ -141,21 +141,39 @@ async def get_system_settings():
     if not redis: 
         raise HTTPException(status_code=500, detail="Redis异常")
     
-    # 从 Redis 获取，如果没有则使用你指定的默认值
-    api_switch = await redis.get("setting:czlevel_api_switch")
+    # 兼容旧版共享配置键，如果新键不存在则回退到旧键
+    single_api_switch = await redis.get("setting:single_api_switch")
+    batch_api_switch = await redis.get("setting:batch_api_switch")
+    legacy_api_switch = await redis.get("setting:czlevel_api_switch")
     shield_enable = await redis.get("setting:enable_zero_level_shield")
     shield_days = await redis.get("setting:active_shield_days")
-    limit = await redis.get("setting:api_query_limit")
-    window = await redis.get("setting:api_query_window")
-    global_limit = await redis.get("setting:global_api_query_limit")
+    single_limit = await redis.get("setting:single_api_query_limit")
+    single_window = await redis.get("setting:single_api_query_window")
+    single_global_limit = await redis.get("setting:single_global_api_query_limit")
+    batch_limit = await redis.get("setting:batch_api_query_limit")
+    batch_window = await redis.get("setting:batch_api_query_window")
+    batch_global_limit = await redis.get("setting:batch_global_api_query_limit")
+    legacy_limit = await redis.get("setting:api_query_limit")
+    legacy_window = await redis.get("setting:api_query_window")
+    legacy_global_limit = await redis.get("setting:global_api_query_limit")
     
     return {
-        "api_switch": _to_int(api_switch, 1),
+        "single_api_switch": _to_int(single_api_switch, _to_int(legacy_api_switch, 1)),
+        "batch_api_switch": _to_int(batch_api_switch, _to_int(legacy_api_switch, 1)),
         "enable_zero_level_shield": _to_bool(shield_enable, True),
         "active_shield_days": _to_int(shield_days, 3),
-        "api_query_limit": _to_int(limit, 600),
-        "api_query_window": _to_int(window, 3600),
-        "global_api_query_limit": _to_int(global_limit, 20000),
+        "single_api_query_limit": _to_int(single_limit, _to_int(legacy_limit, 600)),
+        "single_api_query_window": _to_int(single_window, _to_int(legacy_window, 3600)),
+        "single_global_api_query_limit": _to_int(
+            single_global_limit,
+            _to_int(legacy_global_limit, 20000),
+        ),
+        "batch_api_query_limit": _to_int(batch_limit, _to_int(legacy_limit, 600)),
+        "batch_api_query_window": _to_int(batch_window, _to_int(legacy_window, 3600)),
+        "batch_global_api_query_limit": _to_int(
+            batch_global_limit,
+            _to_int(legacy_global_limit, 20000),
+        ),
     }
 
 @router.post("/api/admin/settings", dependencies=[Depends(verify_admin)])
@@ -166,11 +184,15 @@ async def update_system_settings(settings: SystemSettings):
         raise HTTPException(status_code=500, detail="Redis异常")
     
     # 布尔值转成 "1" 或 "0" 存入 Redis，其他转字符串
-    await redis.set("setting:czlevel_api_switch", str(settings.api_switch))
+    await redis.set("setting:single_api_switch", str(settings.single_api_switch))
+    await redis.set("setting:batch_api_switch", str(settings.batch_api_switch))
     await redis.set("setting:enable_zero_level_shield", "1" if settings.enable_zero_level_shield else "0")
     await redis.set("setting:active_shield_days", str(settings.active_shield_days))
-    await redis.set("setting:api_query_limit", str(settings.api_query_limit))
-    await redis.set("setting:api_query_window", str(settings.api_query_window))
-    await redis.set("setting:global_api_query_limit", str(settings.global_api_query_limit))
+    await redis.set("setting:single_api_query_limit", str(settings.single_api_query_limit))
+    await redis.set("setting:single_api_query_window", str(settings.single_api_query_window))
+    await redis.set("setting:single_global_api_query_limit", str(settings.single_global_api_query_limit))
+    await redis.set("setting:batch_api_query_limit", str(settings.batch_api_query_limit))
+    await redis.set("setting:batch_api_query_window", str(settings.batch_api_query_window))
+    await redis.set("setting:batch_global_api_query_limit", str(settings.batch_global_api_query_limit))
     
     return {"message": "系统核心配置已实时更新 ✅"}
