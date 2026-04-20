@@ -68,16 +68,16 @@ def build_grade_icon(filename: str) -> str:
     """拼接财富等级图标完整 URL"""
     if not filename: return ""
     if filename.startswith("http"): return filename
-    return f"https://p3-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.image"
+    return f"https://p6-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.image"
 
 def build_fans_icon(filename: str) -> str:
     """拼接粉丝团等级图标完整 URL"""
     if not filename: return ""
     if filename.startswith("http"): return filename
-    return f"https://p3-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.image"
+    return f"https://p9-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.image"
 
 def build_gift_icon(filename: str) -> str:
     """拼接礼物图标完整 URL"""
     if not filename: return ""
     if filename.startswith("http"): return filename
-    return f"https://p3-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.png"
+    return f"https://p11-webcast.douyinpic.com/img/webcast/{filename}~tplv-obj.png"

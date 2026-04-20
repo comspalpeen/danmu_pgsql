@@ -124,3 +124,60 @@ class SystemSettings(BaseModel):
     batch_api_query_limit: int = 600
     batch_api_query_window: int = 3600
     batch_global_api_query_limit: int = 20000
+
+
+class ToolsBaseRequest(BaseModel):
+    sec_uid: str
+    room_id: str
+    start_time: str
+    end_time: str
+
+
+class GiftReportPreviewRequest(ToolsBaseRequest):
+    gift_keywords: List[str]
+
+
+class SpenderThresholdPreviewRequest(ToolsBaseRequest):
+    min_total_diamond: int = 0
+
+
+class ToolsPreviewMeta(BaseModel):
+    sec_uid: str
+    room_id: str
+    anchor_name: str = "未知主播"
+    room_title: str = ""
+    start_time: str
+    end_time: str
+
+
+class GiftReportRow(BaseModel):
+    rank: int
+    user_name: str
+    display_id: str = ""
+    sec_uid: str = ""
+    profile_url: str = ""
+    total_count: int = 0
+    send_times: List[str] = []
+    gift_list: List[str] = []
+
+
+class SpenderThresholdRow(BaseModel):
+    rank: int
+    user_name: str
+    display_id: str = ""
+    sec_uid: str = ""
+    profile_url: str = ""
+    total_diamond_count: int = 0
+    gift_list: List[str] = []
+
+
+class GiftReportPreviewResponse(BaseModel):
+    meta: ToolsPreviewMeta
+    gift_keywords: List[str]
+    rows: List[GiftReportRow]
+
+
+class SpenderThresholdPreviewResponse(BaseModel):
+    meta: ToolsPreviewMeta
+    min_total_diamond: int
+    rows: List[SpenderThresholdRow]

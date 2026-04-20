@@ -238,6 +238,7 @@ async def init_indexes(pool):
         "CREATE INDEX IF NOT EXISTS idx_gifts_room_time ON live_gifts (room_id, created_at DESC);",
         "CREATE INDEX IF NOT EXISTS idx_gifts_created_at ON live_gifts (created_at DESC);",
         "CREATE INDEX IF NOT EXISTS idx_gifts_user_id ON live_gifts (user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_gifts_room_send_time ON live_gifts (room_id, send_time DESC);",
         
         # 房间表 
         "CREATE INDEX IF NOT EXISTS idx_rooms_user_id_time ON rooms (user_id, created_at DESC);",
