@@ -79,8 +79,9 @@ async def get_tieba_feed(
     # 第三部分：关联用户信息并分页
     tail_sql = """
         SELECT lh.source_type, lh.tid::text, COALESCE(f.fname, '未知贴吧') AS fname, t.title AS thread_title,
-               lh.hit_content, lh.raw_contents, -- 🚀 这里
-               COALESCE(u.user_name, u.nick_name, lh.author_id::text) AS nick_name,
+               lh.hit_content, lh.raw_contents, 
+               -- 🚀 修复 Bug：将 u.nick_name 移到第一位，优先展示昵称
+               COALESCE(u.nick_name, u.user_name, lh.author_id::text) AS nick_name,
                COALESCE(u.portrait, '') AS portrait, lh.hit_time AS create_time
         FROM latest_hits lh
         JOIN tieba_folder.thread t ON lh.tid = t.tid
@@ -119,7 +120,9 @@ async def get_thread_detail(tid: int):
     # 1. 获取主楼信息
     thread_sql = """
         SELECT t.tid::text, t.title, t."text" AS content, t.contents AS raw_contents, t.create_time,
-               COALESCE(u.user_name, u.nick_name, t.author_id::text) AS nick_name, COALESCE(u.portrait, '') AS portrait
+               -- 🚀 修复 Bug
+               COALESCE(u.nick_name, u.user_name, t.author_id::text) AS nick_name, 
+               COALESCE(u.portrait, '') AS portrait
         FROM tieba_folder.thread t
         LEFT JOIN tieba_folder."user" u ON t.author_id = u.user_id
         WHERE t.tid = $1
@@ -128,7 +131,9 @@ async def get_thread_detail(tid: int):
     # 2. 获取所有回复信息
     posts_sql = """
         SELECT p.pid::text, p."text" AS content, p.contents AS raw_contents, p.create_time,
-               COALESCE(u.user_name, u.nick_name, p.author_id::text) AS nick_name, COALESCE(u.portrait, '') AS portrait
+               -- 🚀 修复 Bug
+               COALESCE(u.nick_name, u.user_name, p.author_id::text) AS nick_name, 
+               COALESCE(u.portrait, '') AS portrait
         FROM tieba_folder.post p
         LEFT JOIN tieba_folder."user" u ON p.author_id = u.user_id
         WHERE p.tid = $1
@@ -138,7 +143,9 @@ async def get_thread_detail(tid: int):
     # 3. 🚀新增：获取所有楼中楼(子评论)信息
     comments_sql = """
         SELECT c.cid::text, c.pid::text, c."text" AS content, c.contents AS raw_contents, c.create_time,
-               COALESCE(u.user_name, u.nick_name, c.author_id::text) AS nick_name, COALESCE(u.portrait, '') AS portrait
+               -- 🚀 修复 Bug
+               COALESCE(u.nick_name, u.user_name, c.author_id::text) AS nick_name, 
+               COALESCE(u.portrait, '') AS portrait
         FROM tieba_folder."comment" c
         LEFT JOIN tieba_folder."user" u ON c.author_id = u.user_id
         WHERE c.tid = $1

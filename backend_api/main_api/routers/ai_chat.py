@@ -369,7 +369,19 @@ async def tool_pk_history(keyword: str):
             
             if not room_ids: return json.dumps({"msg": "本月无直播记录"}, ensure_ascii=False)
             
-            pk_rows = await conn.fetch("SELECT * FROM pk_history WHERE room_id = ANY($1) AND created_at >= $2 ORDER BY created_at DESC LIMIT 50", room_ids, first_day)
+            pk_rows = await conn.fetch(
+                """
+                SELECT *
+                FROM pk_history
+                WHERE room_id = ANY($1)
+                  AND created_at >= $2
+                  AND status = 2
+                ORDER BY created_at DESC
+                LIMIT 50
+                """,
+                room_ids,
+                first_day
+            )
         
         pk_records = []
         for pk in pk_rows:

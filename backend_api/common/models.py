@@ -35,6 +35,8 @@ class RoomSchema(BaseModel):
     room_id: str
     title: str = ""
     nickname: Optional[str] = "" # 👈 新增这一行
+    user_id: Optional[str] = None  # 👈 🌟 加上这个！
+    sec_uid: Optional[str] = None  # 👈 🌟 建议也加上这个！
     cover_url: Optional[str] = None
     created_at: Optional[datetime] = None
     end_time: Optional[datetime] = None
@@ -181,3 +183,21 @@ class SpenderThresholdPreviewResponse(BaseModel):
     meta: ToolsPreviewMeta
     min_total_diamond: int
     rows: List[SpenderThresholdRow]
+class HighLevelFanItem(BaseModel):
+    user_id: str
+    sec_uid: str
+    display_id: str
+    nickname: str
+    avatar_url: str
+    club_level: int
+    intimacy: int
+    participate_time: int
+    pay_grade: int
+
+class ExportNewRequest(BaseModel):
+    user_ids: List[str]
+
+class ScanStatusResponse(BaseModel):
+    status: str  # "processing", "completed", "failed"
+    message: str = ""
+    data: List[HighLevelFanItem] = []

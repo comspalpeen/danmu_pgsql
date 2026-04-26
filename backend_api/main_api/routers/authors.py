@@ -26,12 +26,9 @@ async def get_author_rooms(sec_uid: str, limit: int = 0):
     async with pool.acquire() as conn:
         uid_row = await conn.fetchrow("SELECT user_id FROM users WHERE sec_uid = $1", sec_uid)
         
-        if uid_row and uid_row["user_id"]:
-            sql = "SELECT * FROM rooms WHERE user_id = $1 ORDER BY created_at DESC"
-            args = [uid_row["user_id"]]
-        else:
-            sql = "SELECT * FROM rooms WHERE sec_uid = $1 ORDER BY created_at DESC"
-            args = [sec_uid]
+
+        sql = "SELECT * FROM rooms WHERE user_id = $1 ORDER BY created_at DESC"
+        args = [uid_row["user_id"]]
             
         if limit > 0: sql += f" LIMIT {limit}"
         
@@ -67,12 +64,9 @@ async def search_author_data(
         args = [keyword]
         idx = 2
 
-        if author_user_id:
-            conditions.append(f"r.user_id = ${idx}")
-            args.append(author_user_id)
-        else:
-            conditions.append(f"r.sec_uid = ${idx}")
-            args.append(sec_uid)
+
+        conditions.append(f"r.user_id = ${idx}")
+        args.append(author_user_id)
         idx += 1
 
         where_clause = " AND ".join(conditions)
@@ -155,32 +149,3 @@ async def lookup_user(target_uid: str):
     except: pass
     return {"sec_uid": None}
     
-@router.get("/api/search/users")
-async def search_users_prefix(q: str = Query(..., min_length=1), limit: int = 10):
-    pool = get_db()
-    
-    if q.startswith("MS4wLjABAAA"):
-        sql = """
-            SELECT user_name, sec_uid, avatar_url, pay_grade 
-            FROM users 
-            WHERE sec_uid = $1
-            ORDER BY pay_grade DESC, updated_at DESC LIMIT $2
-        """
-        args = (q, limit)
-    else:
-        sql = """
-            SELECT user_name, sec_uid, avatar_url, pay_grade 
-            FROM users 
-            WHERE LOWER(user_name) LIKE $1 AND sec_uid IS NOT NULL AND sec_uid != ''
-            ORDER BY pay_grade DESC, updated_at DESC LIMIT $2
-        """
-        args = (f"{q.lower()}%", limit)
-
-    async with pool.acquire() as conn:
-        rows = await conn.fetch(sql, *args)
-        res = []
-        for r in rows:
-            d = dict(r)
-            d["avatar_url"] = build_avatar_url(d.get("avatar_url"))
-            res.append(d)
-        return res

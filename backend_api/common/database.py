@@ -28,8 +28,8 @@ async def init_pg():
     # 1. 抖音主池（原封不动，或者你可以把 max_size 调大点抗并发）
     pool = await asyncpg.create_pool(
             dsn=PG_DSN, 
-            min_size=1,            
-            max_size=10,           # 建议给抖音多留点连接
+            min_size=5,            
+            max_size=20,           # 建议给抖音多留点连接
             command_timeout=60,    
             timeout=10,            
             max_inactive_connection_lifetime=280, 

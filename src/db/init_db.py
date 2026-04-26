@@ -14,20 +14,27 @@ from dotenv import load_dotenv
 # Load .env from the root directory of the project
 dotenv_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), '.env')
 load_dotenv(dotenv_path)
+from pathlib import Path
 
+# 获取当前脚本的绝对路径的父目录的父目录的父目录 (src/db/init_db.py -> src/db -> src -> 根目录)
+root_dir = Path(__file__).resolve().parent.parent.parent
+dotenv_path = root_dir / '.env'
+
+load_dotenv(dotenv_path)
 DSN = os.environ.get("PG_DSN")
 if not DSN:
     raise ValueError("PG_DSN is not set in the .env file.")
 
 async def init_tables(pool):
     """初始化 PostgreSQL 基础表"""
-    
+    # 🌟 核心修改：首先确保启用 citext 扩展
+    ext_sql = "CREATE EXTENSION IF NOT EXISTS citext;"
     # 🌟 修改 1：在 users 表中补齐 display_id 字段
     users_ddl = """
     CREATE TABLE IF NOT EXISTS users (
         user_id VARCHAR(64) PRIMARY KEY,
         sec_uid VARCHAR(255),
-        display_id VARCHAR(128),
+        display_id CITEXT,  -- 改为 CITEXT
         user_name VARCHAR(128) NOT NULL,
         gender SMALLINT DEFAULT 0,
         pay_grade SMALLINT DEFAULT 0,
@@ -140,7 +147,6 @@ async def init_tables(pool):
         mode VARCHAR(64),
         duration VARCHAR(64),
         start_time TIMESTAMP,
-        battle_status SMALLINT DEFAULT 0,
         teams JSONB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (battle_id, room_id)
@@ -171,22 +177,22 @@ async def init_tables(pool):
         nickname VARCHAR(128),
         avatar_url VARCHAR(255),
         group_name VARCHAR(64) DEFAULT '默认分组',
-        display_id VARCHAR(64),
+        display_id CITEXT, -- 改为 CITEXT
         grade_icon_url VARCHAR(255),
         follower_count INTEGER DEFAULT 0,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
 
-    check_presets_ddl = """
-    CREATE TABLE IF NOT EXISTS check_presets (
-        sec_uid VARCHAR(255) PRIMARY KEY,
-        nickname VARCHAR(128),
-        avatar_url VARCHAR(255),
-        "group" VARCHAR(64) DEFAULT '默认分组',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
-    """
+  #  check_presets_ddl = """
+  #  CREATE TABLE IF NOT EXISTS check_presets (
+ #       sec_uid VARCHAR(255) PRIMARY KEY,
+ #       nickname VARCHAR(128),
+  #      avatar_url VARCHAR(255),
+  #      "group" VARCHAR(64) DEFAULT '默认分组',
+  #      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  #  );
+  #  """
 
     site_qna_ddl = """
     CREATE TABLE IF NOT EXISTS site_qna (
@@ -208,9 +214,24 @@ async def init_tables(pool):
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
-
+    high_level_fans_ddl = """
+    CREATE TABLE IF NOT EXISTS high_level_fans (
+    user_id VARCHAR(64) PRIMARY KEY,
+    sec_uid VARCHAR(255),
+    display_id VARCHAR(128),
+    nickname VARCHAR(128),
+    avatar_url TEXT,
+    club_level SMALLINT DEFAULT 0,
+    intimacy BIGINT DEFAULT 0,
+    participate_time BIGINT DEFAULT 0,
+    pay_grade SMALLINT DEFAULT 0,
+    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+    """
     try:
         async with pool.acquire() as conn:
+            await conn.execute(ext_sql)
             await conn.execute(users_ddl)
             await conn.execute(cz_fans_ddl)  # 🌟 执行新表创建
             await conn.execute(chats_ddl)
@@ -220,9 +241,10 @@ async def init_tables(pool):
             await conn.execute(pk_history_ddl)
             await conn.execute(daily_reports_ddl)
             await conn.execute(favorite_streamers_ddl)
-            await conn.execute(check_presets_ddl)
+           # await conn.execute(check_presets_ddl)
             await conn.execute(site_qna_ddl)
             await conn.execute(settings_cookies_ddl)
+            await conn.execute(high_level_fans_ddl)
         logger.info("✅ 数据库表结构 (DDL) 创建完成")
     except Exception as e:
         logger.error(f"❌ 初始化数据库表失败: {e}")
@@ -258,6 +280,13 @@ async def init_indexes(pool):
         
         # 日报表
         "CREATE INDEX IF NOT EXISTS idx_daily_reports_uid_date ON daily_reports (uid, date DESC);"
+        #高等级表
+        "CREATE INDEX IF NOT EXISTS idx_hlf_intimacy ON high_level_fans (intimacy DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_hlf_sec_uid ON high_level_fans (sec_uid);"
+        #陈泽等级表
+        "CREATE INDEX cz_fans_last_active_time_idx ON public.cz_fans (last_active_time);",
+        "CREATE INDEX cz_fans_cz_club_level_idx ON public.cz_fans (cz_club_level);"
+        
     ]
     
     success_count = 0

@@ -1,9 +1,12 @@
 # 文件位置: api/routers/rooms.py
-from fastapi import APIRouter, Query
+import asyncio
+from fastapi import APIRouter, Query, Request
+from fastapi.responses import StreamingResponse
 from typing import List
 from datetime import datetime
 import orjson as json
 from backend_api.common.database import get_db
+from backend_api.common.database import get_redis as get_api_redis
 from backend_api.common.models import PkBattle
 from backend_api.common.utils import build_avatar_url, build_grade_icon, build_fans_icon, build_gift_icon
 
@@ -173,7 +176,17 @@ async def get_room_chats(
 async def get_room_pks(room_id: str, limit: int = 20):
     pool = get_db()
     async with pool.acquire() as conn:
-        rows = await conn.fetch("SELECT * FROM pk_history WHERE room_id = $1 ORDER BY created_at DESC LIMIT $2", room_id, limit)
+        rows = await conn.fetch(
+            """
+            SELECT *
+            FROM pk_history
+            WHERE room_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+            """,
+            room_id,
+            limit
+        )
         res = []
         for r in rows:
             d = dict(r)
@@ -218,3 +231,46 @@ async def get_room_pks(room_id: str, limit: int = 20):
             res.append(d)
             
         return res
+
+@router.get("/api/rooms/{room_id}/pk/live")
+async def stream_room_pk(room_id: str, request: Request):
+    redis = await get_api_redis()
+
+    async def event_generator():
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("pk:live:updates")
+
+        try:
+            latest = await redis.get(f"pk:live:{room_id}")
+            if latest:
+                # 🔥 致命错误修复：必须把 bytes decode 成字符串，否则前端 JSON.parse 会崩溃！
+                latest_str = latest.decode('utf-8') if isinstance(latest, bytes) else latest
+                yield f"event: pk_snapshot\ndata: {latest_str}\n\n"
+
+            while True:
+                if await request.is_disconnected():
+                    break
+
+                message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=2.0)
+                if message and message.get("type") == "message":
+                    payload = json.loads(message["data"])
+                    if str(payload.get("room_id")) == str(room_id):
+                        yield f"event: pk_snapshot\ndata: {json.dumps(payload).decode('utf-8')}\n\n"
+                else:
+                    # 每 2 秒推一个心跳，防止 Windows 本地的 TCP 连接因为空闲而进入假死状态
+                    yield "event: ping\ndata: {}\n\n"
+
+                await asyncio.sleep(0.05)
+        finally:
+            await pubsub.unsubscribe("pk:live:updates")
+            await pubsub.close()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

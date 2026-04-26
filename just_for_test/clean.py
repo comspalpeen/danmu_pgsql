@@ -13,7 +13,7 @@ logger = logging.getLogger("Cleaner")
 # 你的数据库连接配置
 DSN = "postgresql://postgres:chufale@127.0.0.1:2077/dy_live_data"
 # 你要清理的特定场次 room_id
-TARGET_ROOM_ID = '7612240511935515442'
+TARGET_ROOM_ID = '7631590918281300751'
 
 async def clean_room_data():
     logger.info(f"🚀 开始精准清理直播间 {TARGET_ROOM_ID} 的所有数据...")

@@ -19,7 +19,35 @@ async def search_site(q: str = Query(..., min_length=1), limit: int = 20):
             d["avatar"] = build_avatar_url(d.get("avatar"))
             res.append(d)
         return res
+@router.get("/api/search/users")
+async def search_users_prefix(q: str = Query(..., min_length=1), limit: int = 10):
+    pool = get_db()
+    
+    if q.startswith("MS4wLjABAAA"):
+        sql = """
+            SELECT user_name, sec_uid, avatar_url, pay_grade 
+            FROM users 
+            WHERE sec_uid = $1
+            ORDER BY pay_grade DESC, updated_at DESC LIMIT $2
+        """
+        args = (q, limit)
+    else:
+        sql = """
+            SELECT user_name, sec_uid, avatar_url, pay_grade 
+            FROM users 
+            WHERE LOWER(user_name) LIKE $1 AND sec_uid IS NOT NULL AND sec_uid != ''
+            ORDER BY pay_grade DESC, updated_at DESC LIMIT $2
+        """
+        args = (f"{q.lower()}%", limit)
 
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(sql, *args)
+        res = []
+        for r in rows:
+            d = dict(r)
+            d["avatar_url"] = build_avatar_url(d.get("avatar_url"))
+            res.append(d)
+        return res
 @router.get("/api/search/global", response_model=List[GlobalSearchResult])
 async def search_global_data(
     keyword: str, 

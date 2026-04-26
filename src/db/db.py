@@ -146,6 +146,7 @@ class AsyncPostgresHandler:
                     setattr(self, task_attr, asyncio.create_task(self._flush_buffer_pipeline(data_type)))
         except Exception as e: 
             logger.error(f"❌ [DB] 缓冲{data_type}失败: {e}")
+            
     async def flush_gift_buffer(self):
         await self._flush_buffer_pipeline('gift')
 
@@ -186,6 +187,18 @@ class AsyncPostgresHandler:
                     web_rid = data.get('web_rid', '')
                     if not uid or not room_id: continue
 
+                    is_light_stick = data.get('_is_light_stick', False)
+
+                    # ==========================================
+                    # 🌟 核心拦截 1：非目标房间灯牌前置拦截
+                    # 其他房间的灯牌仅统计热度后直接销毁，彻底切断幽灵数据源
+                    # ==========================================
+                    if is_light_stick and str(web_rid) != "615189692839":
+                        if room_id not in room_updates: room_updates[room_id] = {'diamond': 0, 'ticket': 0}
+                        room_updates[room_id]['ticket'] += 1
+                        room_updates[room_id]['diamond'] += data.get('diamond_count', 0)
+                        continue 
+
                     clean_avatar = extract_filename(data.get('avatar_url', ''))
                     clean_pay_icon = extract_filename(data.get('pay_grade_icon', ''))
                     clean_fans_icon = extract_filename(data.get('fans_club_icon', ''))
@@ -222,13 +235,16 @@ class AsyncPostgresHandler:
 
                     # 差异化解析
                     if data_type == 'gift':
-                        is_light_stick = data.get('_is_light_stick', False)
                         clean_gift_icon = extract_filename(data.get('gift_icon_url', ''))
                         diamond_count = data.get('diamond_count', 0)
                         combo_count = data.get('combo_count', 1)
                         group_count = data.get('group_count', 1)
                         total_diamond = data.get('total_diamond_count') or (diamond_count * combo_count * group_count)
 
+                        # ==========================================
+                        # 🌟 核心拦截 2：明细表入库拦截
+                        # 保证即使是陈泽直播间的灯牌（用来更新等级后），也不计入 live_gifts 明细表
+                        # ==========================================
                         if not is_light_stick:
                             specific_batch.append((
                                 web_rid, room_id, uid, data.get('user_name', ''), data.get('gift_id', ''), data.get('gift_name', ''), 
@@ -273,7 +289,6 @@ class AsyncPostgresHandler:
                     
                     for idx, (uid, fan_tuple) in enumerate(raw_cz_fans.items()):
                         current_level = fan_tuple[1] # 本次抓取到的最新等级
-                        cached_val = active_levels[idx]
                         
                         # 解析缓存中的等级（如果没缓存则为 -1）
                         cached_val = active_levels[idx]
@@ -288,6 +303,7 @@ class AsyncPostgresHandler:
                             cz_fans_batch[uid] = fan_tuple
                             # 把最新的等级存入 Redis，并重新开始 2 小时计时
                             cz_active_cache_updates[f"cz_active:{uid}"] = str(current_level).encode('utf-8')
+                            
                 # 2.2 全局画像防抖 Hash 过滤
                 users_to_update, hashes_to_cache = [], {}
                 if users_batch:
@@ -508,20 +524,36 @@ class AsyncPostgresHandler:
 
     async def save_pk_result(self, pk_data: dict):
         if not pk_data: return
+        status = int(pk_data.get('status', 0) or 0)
+        if status != 2:
+            return
         try:
             teams_json = orjson.dumps(pk_data.get('teams', [])).decode('utf-8')
             sql = """
-                INSERT INTO pk_history (battle_id, room_id, channel_id, mode, duration, start_time, teams, created_at)
+                INSERT INTO pk_history (
+                    battle_id, room_id, channel_id, mode, duration, start_time,
+                    teams, created_at
+                )
                 VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
                 ON CONFLICT (battle_id, room_id) DO UPDATE SET
                     channel_id = EXCLUDED.channel_id, mode = EXCLUDED.mode,
-                    duration = EXCLUDED.duration, teams = EXCLUDED.teams; 
+                    duration = EXCLUDED.duration, start_time = EXCLUDED.start_time,
+                    teams = EXCLUDED.teams, created_at = EXCLUDED.created_at; 
             """
             async with self.pool.acquire() as conn:
-                await conn.execute(sql, pk_data['battle_id'], pk_data['room_id'], pk_data.get('channel_id'), 
-                                   pk_data.get('mode'), pk_data.get('duration'), to_dt(pk_data.get('start_time')), 
-                                   teams_json, to_dt(pk_data.get('created_at')))
-        except Exception as e: pass
+                await conn.execute(
+                    sql,
+                    pk_data['battle_id'],
+                    pk_data['room_id'],
+                    pk_data.get('channel_id'),
+                    pk_data.get('mode'),
+                    str(pk_data.get('duration', 0) or 0),
+                    to_dt(pk_data.get('start_time')),
+                    teams_json,  
+                    to_dt(pk_data.get('created_at')) 
+                )
+        except Exception as e:
+            logger.error(f"[PK] save_pk_result 写库失败 battle_id={pk_data.get('battle_id')}: {e}", exc_info=True)
 
     async def increment_room_stats(self, room_id: str, inc_data: dict):
         if not room_id or not inc_data: return

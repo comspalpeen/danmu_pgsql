@@ -8,7 +8,6 @@ import urllib.parse
 from unittest.mock import patch
 from contextlib import contextmanager
 import threading
-# 假设 ac_signature 在项目目录下，保持原样导入
 from src.utils.ac_signature import get__ac_signature
 import os
 import py_mini_racer 

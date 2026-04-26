@@ -269,7 +269,7 @@ async def batch_check_cz_level(req: CzLevelBatchRequest, request: Request):
         item = parsed_targets[t]
         val  = item["value"]
         
-        record = db_records.get(val)
+        record = db_records.get(val) or db_records.get(val.lower())
         source = base_source
 
         if not record and item["type"] == "display_id" and val in converted_map:

@@ -42,7 +42,6 @@ def _to_bool(value, default: bool) -> bool:
         return False
     return default
 
-# （⚠️ 原先在此处的 4 个常量配置已删除，改为从 Redis 动态获取）
 
 UPSERT_USERS_SQL = """
     INSERT INTO users (user_id, sec_uid, display_id, user_name, gender, pay_grade, avatar_url)
@@ -197,16 +196,43 @@ async def fetch_users_batch_from_db(pool, sec_uids: list, display_ids: list) -> 
     db_records = {}
     if not sec_uids and not display_ids:
         return db_records
+        
     async with pool.acquire() as conn:
-        query = """
+        base_query = """
             SELECT u.user_id, u.sec_uid, u.display_id, u.user_name, u.avatar_url, f.cz_club_level AS raw_cz_level
             FROM users u LEFT JOIN cz_fans f ON u.user_id = f.user_id
-            WHERE u.sec_uid = ANY($1::text[]) OR u.display_id = ANY($2::text[])
         """
-        rows = await conn.fetch(query, sec_uids, display_ids)
+        
+        rows = []
+        # 🚀 核心优化：动态查询分流，避免 OR 导致索引失效
+        if display_ids and not sec_uids:
+            # 场景一：只查询 display_id（大部分对接方请求）
+            query = f"{base_query} WHERE u.display_id = ANY($1::citext[])"
+            rows = await conn.fetch(query, display_ids)
+            
+        elif sec_uids and not display_ids:
+            # 场景二：只查询 sec_uid
+            query = f"{base_query} WHERE u.sec_uid = ANY($1::text[])"
+            rows = await conn.fetch(query, sec_uids)
+            
+        else:
+            # 场景三：混合查询（极少发生）。使用 UNION ALL 替代 OR，强制优化器对双字段分别走索引
+            query = f"""
+                {base_query} WHERE u.display_id = ANY($1::citext[])
+                UNION ALL
+                {base_query} WHERE u.sec_uid = ANY($2::text[])
+            """
+            rows = await conn.fetch(query, display_ids, sec_uids)
+
+        # 遍历组装字典，处理 UNION ALL 可能带来的重合数据合并
         for r in rows:
-            if r['sec_uid']:    db_records[r['sec_uid']]    = dict(r)
-            if r['display_id']: db_records[r['display_id']] = dict(r)
+            row_dict = dict(r)
+            if r['sec_uid']:
+                db_records[r['sec_uid']] = row_dict
+            if r['display_id']:
+                db_records[r['display_id']] = row_dict
+                db_records[r['display_id'].lower()] = row_dict  # 多写一个小写 key
+                
     return db_records
 
 async def update_display_id_in_db(pool, display_id: str, sec_uid: str):
